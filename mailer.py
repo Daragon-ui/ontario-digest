@@ -1,15 +1,23 @@
 """
 mailer.py — Envoi du digest par courriel via Resend (resend.com).
+
+Resend est un service d'envoi de courriels gratuit (100/jour sur le plan gratuit).
+Aucune configuration Gmail complexe n'est requise — juste une clé API.
+
+Variables d'environnement requises :
+  RESEND_API_KEY   — clé API Resend (re_...)
+  SENDER_EMAIL     — adresse expéditrice vérifiée sur Resend
+                     (sur le plan gratuit : utilisez onboarding@resend.dev)
+  RECIPIENT_EMAIL  — adresse de destination
 """
 
 import os
-import json
-import urllib.request
-import urllib.error
+import resend
 from datetime import datetime
 
 
 def markdown_to_html(texte: str) -> str:
+    """Conversion minimale de Markdown → HTML sans dépendance externe."""
     lignes = texte.split("\n")
     html_lignes = []
     in_list = False
@@ -32,6 +40,20 @@ def markdown_to_html(texte: str) -> str:
                 html_lignes.append("<ul>")
                 in_list = True
             html_lignes.append(f"<li>{ligne[2:].strip()}</li>")
+        elif ligne.startswith("**") and ligne.endswith("**") and len(ligne) > 4:
+            if in_list:
+                html_lignes.append("</ul>")
+                in_list = False
+            contenu = ligne[2:-2]
+            html_lignes.append(f"<p><strong>{contenu}</strong></p>")
+        elif ligne.strip().startswith("*") and ligne.strip().endswith("*") and len(ligne.strip()) > 2:
+            if in_list:
+                html_lignes.append("</ul>")
+                in_list = False
+            contenu = ligne.strip()[1:-1]
+            html_lignes.append(
+                f'<p style="color:#888;font-style:italic;font-size:13px;">{contenu}</p>'
+            )
         elif ligne.strip() == "---":
             if in_list:
                 html_lignes.append("</ul>")
@@ -74,9 +96,10 @@ def construire_html(digest_texte: str, date_str: str) -> str:
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Digest politique ontarien — {date_str}</title>
 </head>
-<body style="font-family: Georgia, serif; max-width: 680px; margin: 0 auto;
+<body style="font-family: Georgia, 'Times New Roman', serif; max-width: 680px; margin: 0 auto;
              padding: 24px; color: #2c2c2c; background: #ffffff; line-height: 1.7;">
 
   <div style="background: #1a3a5c; color: white; padding: 20px 24px; border-radius: 6px 6px 0 0;">
@@ -89,13 +112,19 @@ def construire_html(digest_texte: str, date_str: str) -> str:
   </div>
 
   <div style="margin-top: 24px; font-size: 12px; color: #999; border-top: 1px solid #eee; padding-top: 12px;">
-    <p>Pipeline propulsé par l'API Claude (Anthropic)</p>
+    <p>
+      Ce digest a été généré automatiquement à partir de sources officielles :<br>
+      Hansard OLA · news.ontario.ca · Gazette de l'Ontario ·
+      Registre des lobbyistes · Registre de la réglementation · Décrets du Conseil
+    </p>
+    <p>Pipeline propulsé par l'API Claude (Anthropic) · <a href="https://www.anthropic.com" style="color:#1a3a5c;">anthropic.com</a></p>
   </div>
 </body>
 </html>"""
 
 
 def send_email(digest_texte: str) -> None:
+    """Envoie le digest via l'API Resend (resend.com)."""
     api_key = os.environ.get("RESEND_API_KEY", "").strip()
     expediteur = os.environ.get("SENDER_EMAIL", "onboarding@resend.dev").strip()
     destinataire = os.environ.get("RECIPIENT_EMAIL", "").strip()
@@ -105,33 +134,18 @@ def send_email(digest_texte: str) -> None:
     if not destinataire:
         raise EnvironmentError("Variable RECIPIENT_EMAIL manquante.")
 
+    resend.api_key = api_key
+
     date_str = datetime.now().strftime("%A %d %B %Y")
     sujet = f"🏛️ Digest politique ontarien — {date_str}"
     html = construire_html(digest_texte, date_str)
 
-    payload = json.dumps({
+    print(f"📧 Envoi du digest à {destinataire} via Resend...")
+    result = resend.Emails.send({
         "from": f"Digest Ontario <{expediteur}>",
         "to": [destinataire],
         "subject": sujet,
         "html": html,
         "text": digest_texte,
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    print(f"📧 Envoi du digest à {destinataire} via Resend...")
-    try:
-        with urllib.request.urlopen(req) as resp:
-            result = json.loads(resp.read())
-            print(f"✅ Courriel envoyé. ID : {result.get('id', 'n/a')}")
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        raise RuntimeError(f"Erreur Resend ({e.code}): {body}") from e
+    })
+    print(f"✅ Courriel envoyé avec succès. ID : {result.get('id', 'n/a')}")
