@@ -1,4 +1,5 @@
 anthropic
+resend
 requests
 beautifulsoup4
 feedparser
