@@ -1,5 +1,17 @@
 """
 main.py — Point d'entrée du pipeline de veille politique ontarienne.
+
+Usage :
+  python main.py
+
+Variables d'environnement requises :
+  ANTHROPIC_API_KEY   — clé API Anthropic (console.anthropic.com)
+  GMAIL_ADDRESS       — adresse Gmail expéditrice
+  GMAIL_APP_PASSWORD  — mot de passe d'application Gmail (16 caractères)
+  RECIPIENT_EMAIL     — adresse courriel destinataire
+
+Pour tester sans envoyer de courriel :
+  DRY_RUN=1 python main.py
 """
 
 import os
@@ -13,6 +25,7 @@ from mailer import send_email
 
 
 def verifier_variables():
+    """Vérifie que les variables d'environnement essentielles sont définies."""
     dry_run = os.environ.get("DRY_RUN", "").strip() == "1"
     requises = ["ANTHROPIC_API_KEY"]
     if not dry_run:
@@ -21,6 +34,7 @@ def verifier_variables():
     manquantes = [v for v in requises if not os.environ.get(v)]
     if manquantes:
         print(f"❌ Variables d'environnement manquantes : {', '.join(manquantes)}")
+        print("   Consultez le guide de configuration pour les définir.")
         sys.exit(1)
 
 
@@ -33,23 +47,29 @@ def main():
     if dry_run:
         print("🔧 Mode DRY_RUN activé — aucun courriel ne sera envoyé.\n")
 
+    # 1. Vérifier la configuration
     verifier_variables()
 
+    # 2. Récupérer les sources ontariennes
     sources = fetch_all()
 
+    # 3. Récupérer les sources interprovinciales
     sources_interprov = fetch_interprovincial()
     sources["Ontario ailleurs au Canada (sources interprovinciales)"] = sources_interprov
 
+    # 4. Générer le digest avec Claude
     digest = generate_digest(sources)
 
+    # 5. Afficher le résultat dans la console
     print(f"\n{'='*60}")
     print("DIGEST GÉNÉRÉ :")
     print(f"{'='*60}")
     print(digest)
     print(f"{'='*60}\n")
 
+    # 6. Envoyer par courriel (sauf en mode dry run)
     if dry_run:
-        print("🔧 DRY_RUN : courriel non envoyé.")
+        print("🔧 DRY_RUN : courriel non envoyé. Le digest est affiché ci-dessus.")
     else:
         send_email(digest)
 
