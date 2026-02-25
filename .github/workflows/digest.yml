@@ -2,7 +2,12 @@ name: Digest politique ontarien
 
 on:
   schedule:
-    - cron: "0 11 * * 1-5"
+    # 6h00 HNE (heure normale de l'Est) = 11h00 UTC
+    # 6h00 HAE (heure avancée de l'Est) = 10h00 UTC
+    # On utilise 11h UTC pour couvrir les deux (arrive à 6h ou 7h selon la saison)
+    - cron: "0 11 * * 1-5"   # Du lundi au vendredi seulement
+
+  # Permet de déclencher manuellement depuis l'interface GitHub
   workflow_dispatch:
 
 jobs:
@@ -23,6 +28,9 @@ jobs:
 
       - name: Installer les dépendances
         run: pip install -r requirements.txt
+
+      - name: Installer le navigateur Playwright (Chromium)
+        run: playwright install chromium --with-deps
 
       - name: Générer et envoyer le digest
         env:
