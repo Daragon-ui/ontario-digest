@@ -1,6 +1,16 @@
 """
 interprovincial.py — Surveillance des sources officielles des autres provinces
 canadiennes pour détecter toute référence à l'Ontario.
+
+Sources ciblées :
+  - Gazettes officielles des provinces
+  - Registres de lobbyistes provinciaux
+  - Hansards et journaux législatifs
+  - Bases de données d'appels d'offres
+  - Organismes de réglementation (énergie, transport, environnement, finances)
+
+L'objectif : repérer des mentions peu médiatisées de l'Ontario qui pourraient
+signaler un conflit interprovincial, un accord en négociation, ou un scoop.
 """
 
 import time
@@ -10,6 +20,7 @@ import feedparser
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from fetchers import safe_get_js
 
 HEADERS = {
     "User-Agent": (
@@ -19,11 +30,12 @@ HEADERS = {
     )
 }
 
+# Mots-clés pour détecter les références à l'Ontario dans des documents étrangers
 MOTS_CLES_ONTARIO = [
     "ontario", "ontario's", "ontarian", "ontarien", "ontarienne",
     "toronto", "ottawa", "hamilton", "london", "windsor", "brampton",
     "doug ford", "ford government", "gouvernement ford",
-    "queen's park",
+    "queen's park", "queen's park",
 ]
 
 PATTERN_ONTARIO = re.compile(
@@ -43,6 +55,7 @@ def safe_get(url: str, timeout: int = 15) -> Optional[requests.Response]:
 
 
 def texte_pertinent(html_ou_texte: str, max_chars: int = 800) -> str:
+    """Extrait les paragraphes contenant des mots-clés ontariens."""
     if "<" in html_ou_texte:
         soup = BeautifulSoup(html_ou_texte, "html.parser")
         for tag in soup(["script", "style", "nav", "footer"]):
@@ -73,8 +86,13 @@ def formater_resultat(province: str, source: str, url: str, extrait: str) -> str
     )
 
 
+# ---------------------------------------------------------------------------
+# QUÉBEC
+# ---------------------------------------------------------------------------
 def fetch_quebec():
     resultats = []
+
+    # Gazette officielle du Québec — Index des publications récentes
     r = safe_get("https://www.publicationsduquebec.gouv.qc.ca/home.php")
     if r:
         ext = texte_pertinent(r.text)
@@ -82,6 +100,7 @@ def fetch_quebec():
             resultats.append(formater_resultat("Québec", "Gazette officielle du Québec",
                 "https://www.publicationsduquebec.gouv.qc.ca", ext))
 
+    # Assemblée nationale — Journal des débats (flux RSS)
     feed = feedparser.parse("https://www.assnat.qc.ca/fr/travaux-parlementaires/journaux-debats/rss.xml")
     for entry in feed.entries[:5]:
         texte = entry.get("summary", "") + " " + entry.get("title", "")
@@ -91,17 +110,24 @@ def fetch_quebec():
                 entry.get("link", ""), ext[:500]))
             break
 
-    r = safe_get("https://www.seao.ca/OpportunityPublication/rechercheOc.aspx?lang=fr")
+    # SEAO — Appels d'offres (site ASP.NET JS-dépendant)
+    r = safe_get_js("https://www.seao.ca/OpportunityPublication/rechercheOc.aspx?lang=fr")
     if r:
         ext = texte_pertinent(r.text)
         if ext:
             resultats.append(formater_resultat("Québec", "SEAO — Appels d'offres",
                 "https://www.seao.ca", ext))
+
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# COLOMBIE-BRITANNIQUE
+# ---------------------------------------------------------------------------
 def fetch_bc():
     resultats = []
+
+    # BC Gazette
     r = safe_get("https://www.bclaws.gov.bc.ca/civix/document/id/bcgaz1/bcgaz1/")
     if r:
         ext = texte_pertinent(r.text)
@@ -109,9 +135,11 @@ def fetch_bc():
             resultats.append(formater_resultat("Colombie-Britannique", "BC Gazette",
                 "https://www.bclaws.gov.bc.ca", ext))
 
+    # BC Legislature — Hansard (Debates)
     r = safe_get("https://www.leg.bc.ca/parliamentary-business/hansard-blues/house")
     if r:
         soup = BeautifulSoup(r.text, "html.parser")
+        # Trouver le lien le plus récent
         for a in soup.find_all("a", href=True):
             if "hansard" in a["href"].lower() or "debate" in a["href"].lower():
                 lien = a["href"]
@@ -123,20 +151,36 @@ def fetch_bc():
                     ext = texte_pertinent(r2.text)
                     if ext:
                         resultats.append(formater_resultat("Colombie-Britannique",
-                            f"Hansard BC — {a.get_text(strip=True)}", lien, ext))
+                            f"Hansard BC — {a.get_text(strip=True)}",
+                            lien, ext))
                 break
 
+    # BC Lobbyists Registry
     r = safe_get("https://www.lobbyistsregistrar.bc.ca/app/secure/orl/lrs/do/lbrSearch")
     if r:
         ext = texte_pertinent(r.text)
         if ext:
             resultats.append(formater_resultat("Colombie-Britannique",
                 "Registre des lobbyistes de la C.-B.", "https://www.lobbyistsregistrar.bc.ca", ext))
+
+    # BC Utilities Commission (énergie/transport)
+    r = safe_get("https://www.bcuc.com/OurWork/Applications")
+    if r:
+        ext = texte_pertinent(r.text)
+        if ext:
+            resultats.append(formater_resultat("Colombie-Britannique",
+                "BC Utilities Commission", "https://www.bcuc.com", ext))
+
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# ALBERTA
+# ---------------------------------------------------------------------------
 def fetch_alberta():
     resultats = []
+
+    # Alberta Gazette
     r = safe_get("https://open.alberta.ca/publications?subject=alberta-gazette")
     if r:
         ext = texte_pertinent(r.text)
@@ -144,6 +188,7 @@ def fetch_alberta():
             resultats.append(formater_resultat("Alberta", "Alberta Gazette",
                 "https://open.alberta.ca", ext))
 
+    # Alberta Legislature — Hansard
     r = safe_get("https://www.assembly.ab.ca/assembly-business/hansard")
     if r:
         ext = texte_pertinent(r.text)
@@ -151,17 +196,32 @@ def fetch_alberta():
             resultats.append(formater_resultat("Alberta", "Hansard de l'Assemblée de l'Alberta",
                 "https://www.assembly.ab.ca", ext))
 
+    # Alberta Lobbyists Registry
     r = safe_get("https://www.lobbyists.alberta.ca/public/registrant-search")
     if r:
         ext = texte_pertinent(r.text)
         if ext:
             resultats.append(formater_resultat("Alberta", "Registre des lobbyistes de l'Alberta",
                 "https://www.lobbyists.alberta.ca", ext))
+
+    # Alberta Utilities Commission
+    r = safe_get("https://www.auc.ab.ca/regulatory-documents")
+    if r:
+        ext = texte_pertinent(r.text)
+        if ext:
+            resultats.append(formater_resultat("Alberta", "Alberta Utilities Commission",
+                "https://www.auc.ab.ca", ext))
+
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# MANITOBA
+# ---------------------------------------------------------------------------
 def fetch_manitoba():
     resultats = []
+
+    # Manitoba Gazette
     r = safe_get("https://web2.gov.mb.ca/laws/gazette/index_gazette.php")
     if r:
         ext = texte_pertinent(r.text)
@@ -169,6 +229,7 @@ def fetch_manitoba():
             resultats.append(formater_resultat("Manitoba", "Gazette du Manitoba",
                 "https://web2.gov.mb.ca", ext))
 
+    # Manitoba Legislature — Debates
     r = safe_get("https://www.gov.mb.ca/legislature/hansard/index.html")
     if r:
         soup = BeautifulSoup(r.text, "html.parser")
@@ -183,42 +244,70 @@ def fetch_manitoba():
                     ext = texte_pertinent(r2.text)
                     if ext:
                         resultats.append(formater_resultat("Manitoba",
-                            f"Hansard Manitoba — {a.get_text(strip=True)}", lien, ext))
+                            f"Hansard Manitoba — {a.get_text(strip=True)}",
+                            lien, ext))
                 break
+
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# SASKATCHEWAN
+# ---------------------------------------------------------------------------
 def fetch_saskatchewan():
     resultats = []
-    r = safe_get("https://publications.saskatchewan.ca/#/products?pageSize=20&keyword=gazette")
+
+    # Saskatchewan Gazette — SPA avec routage côté client, nécessite JavaScript
+    r = safe_get_js("https://publications.saskatchewan.ca/#/products?pageSize=20&keyword=gazette")
     if r:
         ext = texte_pertinent(r.text)
         if ext:
             resultats.append(formater_resultat("Saskatchewan", "Gazette de la Saskatchewan",
                 "https://publications.saskatchewan.ca", ext))
 
+    # Saskatchewan Legislature — Hansard
     r = safe_get("https://www.legassembly.sk.ca/legislative-business/hansard/")
     if r:
         ext = texte_pertinent(r.text)
         if ext:
             resultats.append(formater_resultat("Saskatchewan",
                 "Hansard de la Saskatchewan", "https://www.legassembly.sk.ca", ext))
+
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# NOUVELLES-ÉCOSSE
+# ---------------------------------------------------------------------------
 def fetch_nova_scotia():
     resultats = []
+
+    # NS Legislature — Hansard
     r = safe_get("https://nslegislature.ca/legislative-business/hansard")
     if r:
         ext = texte_pertinent(r.text)
         if ext:
             resultats.append(formater_resultat("Nouvelle-Écosse",
                 "Hansard de la Nouvelle-Écosse", "https://nslegislature.ca", ext))
+
+    # NS Utility and Review Board
+    r = safe_get("https://nsuarb.novascotia.ca/hearings")
+    if r:
+        ext = texte_pertinent(r.text)
+        if ext:
+            resultats.append(formater_resultat("Nouvelle-Écosse",
+                "NS Utility and Review Board", "https://nsuarb.novascotia.ca", ext))
+
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# NOUVEAU-BRUNSWICK
+# ---------------------------------------------------------------------------
 def fetch_new_brunswick():
     resultats = []
+
+    # NB Legislature — Hansard
     r = safe_get("https://www.gnb.ca/legis/hansard/index-f.asp")
     if r:
         ext = texte_pertinent(r.text)
@@ -226,17 +315,23 @@ def fetch_new_brunswick():
             resultats.append(formater_resultat("Nouveau-Brunswick",
                 "Hansard du N.-B.", "https://www.gnb.ca/legis/hansard/", ext))
 
+    # Gazette royale du Nouveau-Brunswick
     r = safe_get("https://www.gnb.ca/gazette/index-f.asp")
     if r:
         ext = texte_pertinent(r.text)
         if ext:
             resultats.append(formater_resultat("Nouveau-Brunswick",
                 "Gazette royale du N.-B.", "https://www.gnb.ca/gazette/", ext))
+
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# ÎLE-DU-PRINCE-ÉDOUARD
+# ---------------------------------------------------------------------------
 def fetch_pei():
     resultats = []
+
     r = safe_get("https://www.assembly.pe.ca/hansard")
     if r:
         ext = texte_pertinent(r.text)
@@ -246,17 +341,33 @@ def fetch_pei():
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# TERRE-NEUVE-ET-LABRADOR
+# ---------------------------------------------------------------------------
 def fetch_newfoundland():
     resultats = []
+
     r = safe_get("https://www.assembly.nl.ca/HouseBusiness/Hansard")
     if r:
         ext = texte_pertinent(r.text)
         if ext:
             resultats.append(formater_resultat("Terre-Neuve-et-Labrador",
                 "Hansard de T.-N.-L.", "https://www.assembly.nl.ca", ext))
+
+    # NL Public Utilities Board
+    r = safe_get("https://pub.nl.ca/applications/")
+    if r:
+        ext = texte_pertinent(r.text)
+        if ext:
+            resultats.append(formater_resultat("Terre-Neuve-et-Labrador",
+                "NL Public Utilities Board", "https://pub.nl.ca", ext))
+
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# TERRITOIRES (couverture légère)
+# ---------------------------------------------------------------------------
 def fetch_territories():
     resultats = []
     sources = [
@@ -276,7 +387,14 @@ def fetch_territories():
     return resultats
 
 
+# ---------------------------------------------------------------------------
+# Orchestrateur principal
+# ---------------------------------------------------------------------------
 def fetch_interprovincial() -> str:
+    """
+    Lance la surveillance de toutes les sources interprovinciales.
+    Retourne un bloc de texte formaté pour Claude.
+    """
     print("  → Surveillance interprovinciale...")
 
     fetchers = [
@@ -297,9 +415,9 @@ def fetch_interprovincial() -> str:
         try:
             resultats = fn()
             if resultats:
-                print(f"    ✓ {nom_province} : {len(resultats)} référence(s) trouvée(s)")
+                print(f"    ✓ {nom_province} : {len(resultats)} référence(s) à l'Ontario trouvée(s)")
                 tous_resultats.extend(resultats)
-            time.sleep(0.5)
+            time.sleep(0.5)  # Politesse entre provinces
         except Exception as e:
             print(f"    ⚠ Erreur pour {nom_province} : {e}")
 
