@@ -25,6 +25,33 @@ SESSION.headers.update({
 })
 
 
+def safe_get_js(url, timeout=30):
+    """Charge une page via Playwright pour les sites qui nécessitent JavaScript."""
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        print(f"  ⚠ Playwright non installé — fallback HTTP pour {url[:60]}")
+        return safe_get(url)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.set_extra_http_headers({"Accept-Language": "en-CA,en;q=0.9,fr-CA;q=0.8"})
+            page.goto(url, wait_until="networkidle", timeout=timeout * 1000)
+            content = page.content()
+            browser.close()
+        print(f"    ✓ JS {url[:80]} ({len(content):,} chars)")
+
+        class _R:
+            text = content
+            status_code = 200
+
+        return _R()
+    except Exception as e:
+        print(f"  ⚠ JS {url[:80]} : {e}")
+        return None
+
+
 def safe_get(url, timeout=20, params=None):
     """Fait une requête HTTP sécurisée avec sortie de débogage."""
     try:
@@ -142,6 +169,11 @@ def fetch_news_ontario():
 def fetch_hansard():
     print("  → Hansard (ola.org)...")
 
+    # L'Assemblée est en recès jusqu'au 23 mars 2026 — aucun suivi avant cette date.
+    if datetime.now() < datetime(2026, 3, 23):
+        print("  → Hansard suspendu (recès jusqu'au 23 mars 2026).")
+        return "Hansard non suivi jusqu'au 23 mars 2026 (Assemblée en recès)."
+
     year = datetime.now().year
 
     index_urls = [
@@ -207,15 +239,20 @@ def fetch_gazette():
 # ---------------------------------------------------------------------------
 def fetch_lobbyist_registry():
     print("  → Registre des lobbyistes...")
-    for url in [
-        "https://www.ontario.ca/page/lobbyist-registry",
-        "https://lobbyist.ontario.ca/lobbyistregistry/faces/publicregistration/searchRegistrations.xhtml",
-    ]:
-        r = safe_get(url)
-        if r and len(r.text) > 500:
-            text = soup_text(r, max_chars=3000)
-            if len(text) > 100:
-                return text
+    # ontario.ca/page : simple HTML
+    r = safe_get("https://www.ontario.ca/page/lobbyist-registry")
+    if r and len(r.text) > 500:
+        text = soup_text(r, max_chars=3000)
+        if len(text) > 100:
+            return text
+    # Portail JSF — nécessite JavaScript
+    r = safe_get_js(
+        "https://lobbyist.ontario.ca/lobbyistregistry/faces/publicregistration/searchRegistrations.xhtml"
+    )
+    if r and len(r.text) > 500:
+        text = soup_text(r, max_chars=3000)
+        if len(text) > 100:
+            return text
     return "Registre des lobbyistes non disponible aujourd'hui."
 
 
@@ -343,4 +380,3 @@ def fetch_all() -> dict:
     }
     print("✅ Sources récupérées.")
     return sources
-
