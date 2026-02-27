@@ -133,9 +133,9 @@ def fetch_news_ontario():
     if rss:
         return rss
 
-    # HTML fallback: scrape the releases page
+    # HTML fallback: scrape the releases page (essaie d'abord sans JS, puis avec)
     for url in ["https://news.ontario.ca/en/releases", "https://news.ontario.ca/en"]:
-        r = safe_get(url)
+        r = safe_get(url) or safe_get_js(url)
         if not r:
             continue
         soup = BeautifulSoup(r.text, "html.parser")
@@ -292,7 +292,8 @@ def fetch_orders_in_council():
             month += 12
             year -= 1
 
-        r = safe_get(search_url, params={"year": year, "month": month})
+        url_mois = f"{search_url}?year={year}&month={month}"
+        r = safe_get(url_mois) or safe_get_js(url_mois)
         if not r:
             continue
 
@@ -316,7 +317,7 @@ def fetch_orders_in_council():
 
     # If date-filtered search found nothing, try without filters
     if not all_order_links:
-        r = safe_get(search_url)
+        r = safe_get(search_url) or safe_get_js(search_url)
         if r:
             soup = BeautifulSoup(r.text, "html.parser")
             for a in soup.find_all("a", href=True):
@@ -331,7 +332,7 @@ def fetch_orders_in_council():
                     all_order_links.append((texte or href.rstrip("/").split("/")[-1], full))
 
     if not all_order_links:
-        r = safe_get(search_url)
+        r = safe_get(search_url) or safe_get_js(search_url)
         if r:
             return (
                 "Décrets du Conseil (index seulement — "
@@ -344,7 +345,7 @@ def fetch_orders_in_council():
     resultats = []
     for titre, lien in all_order_links[:5]:
         time.sleep(1)
-        r_order = safe_get(lien)
+        r_order = safe_get(lien) or safe_get_js(lien)
         if not r_order:
             resultats.append(f"Décret : {titre}\nLien : {lien}\n(Contenu non accessible)")
             continue
