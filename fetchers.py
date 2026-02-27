@@ -274,8 +274,150 @@ def fetch_regulatory_registry():
 
 
 # ---------------------------------------------------------------------------
-# 6. Décrets du Conseil — exploration de chaque décret individuel
+# 6. Décrets du Conseil — interception réseau + scraping du HTML rendu
 # ---------------------------------------------------------------------------
+def _fetch_oic_via_playwright(year, month):
+    """
+    Charge la page de recherche des décrets via Playwright,
+    intercepte les réponses JSON de l'API interne d'ontario.ca,
+    et retourne (captured_json, rendered_html).
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None, None
+
+    base = "https://www.ontario.ca"
+    url = f"{base}/search/orders-in-council?year={year}&month={month}"
+    captured_json = []
+    rendered_html = None
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                extra_http_headers={"Accept-Language": "en-CA,en;q=0.9"}
+            )
+            page = context.new_page()
+
+            def on_response(response):
+                ct = response.headers.get("content-type", "")
+                if response.status == 200 and (
+                    "json" in ct
+                    or "orders-in-council" in response.url
+                    or "/api/" in response.url
+                    or "/search" in response.url
+                ):
+                    try:
+                        data = response.json()
+                        captured_json.append((response.url, data))
+                        print(f"    ✓ API interceptée : {response.url[:80]}")
+                    except Exception:
+                        pass
+
+            page.on("response", on_response)
+            page.goto(url, wait_until="networkidle", timeout=45_000)
+
+            # Attendre que des résultats apparaissent dans le DOM
+            for selector in [
+                ".search-results",
+                "[class*='result']",
+                "table",
+                "ul li a[href*='orders-in-council']",
+            ]:
+                try:
+                    page.wait_for_selector(selector, timeout=5_000)
+                    break
+                except Exception:
+                    pass
+
+            # Scroll pour déclencher le lazy-loading éventuel
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(2_000)
+
+            rendered_html = page.content()
+            browser.close()
+
+    except Exception as e:
+        print(f"  ⚠ Playwright OIC : {e}")
+
+    return captured_json, rendered_html
+
+
+def _parse_oic_json(captured_json):
+    """
+    Essaie d'extraire des décrets depuis les données JSON interceptées.
+    Retourne une liste de dicts ou None.
+    """
+    orders = []
+
+    for _url, data in captured_json:
+        def walk(obj, depth=0):
+            if depth > 6:
+                return
+            if isinstance(obj, list):
+                for item in obj:
+                    walk(item, depth + 1)
+            elif isinstance(obj, dict):
+                keys_lower = {k.lower(): v for k, v in obj.items()}
+                titre = (
+                    keys_lower.get("title")
+                    or keys_lower.get("name")
+                    or keys_lower.get("label")
+                    or ""
+                )
+                date = (
+                    keys_lower.get("date")
+                    or keys_lower.get("approved_date")
+                    or keys_lower.get("filed_date")
+                    or keys_lower.get("effective_date")
+                    or ""
+                )
+                lien = (
+                    keys_lower.get("url")
+                    or keys_lower.get("link")
+                    or keys_lower.get("href")
+                    or ""
+                )
+                numero = (
+                    keys_lower.get("number")
+                    or keys_lower.get("order_number")
+                    or keys_lower.get("oin")
+                    or ""
+                )
+                resume = (
+                    keys_lower.get("summary")
+                    or keys_lower.get("description")
+                    or keys_lower.get("body")
+                    or ""
+                )
+                if titre and (date or numero):
+                    if lien and not str(lien).startswith("http"):
+                        lien = "https://www.ontario.ca" + str(lien)
+                    orders.append({
+                        "titre": str(titre),
+                        "date": str(date),
+                        "numero": str(numero),
+                        "lien": str(lien),
+                        "resume": str(resume)[:500],
+                    })
+                for v in obj.values():
+                    walk(v, depth + 1)
+
+        walk(data)
+
+    # Dédoublonner
+    seen = set()
+    unique = []
+    for o in orders:
+        key = o["titre"] + o["date"]
+        if key not in seen:
+            seen.add(key)
+            unique.append(o)
+
+    return unique if unique else None
+
+
 def fetch_orders_in_council():
     print("  → Décrets du Conseil...")
 
@@ -283,8 +425,7 @@ def fetch_orders_in_council():
     base = "https://www.ontario.ca"
     search_url = f"{base}/search/orders-in-council"
 
-    # Try current month, then previous month, to find recent orders
-    all_order_links = []
+    # --- Étape 1 : Playwright avec interception réseau (mois courant, puis précédent) ---
     for delta in [0, 1]:
         month = today.month - delta
         year = today.year
@@ -292,74 +433,110 @@ def fetch_orders_in_council():
             month += 12
             year -= 1
 
-        url_mois = f"{search_url}?year={year}&month={month}"
-        r = safe_get(url_mois) or safe_get_js(url_mois)
-        if not r:
-            continue
+        captured_json, rendered_html = _fetch_oic_via_playwright(year, month)
 
-        soup = BeautifulSoup(r.text, "html.parser")
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            texte = a.get_text(strip=True)
-            # Individual order pages have paths like /orders-in-council/YYYY/NNNN
-            if (
-                "orders-in-council" in href
-                and "/search/" not in href
-                and href.count("/") >= 3
-            ):
-                full = href if href.startswith("http") else base + href
-                entry = (texte or href.rstrip("/").split("/")[-1], full)
-                if entry not in all_order_links:
-                    all_order_links.append(entry)
+        # Tenter d'extraire depuis le JSON intercepté
+        if captured_json:
+            orders = _parse_oic_json(captured_json)
+            if orders:
+                lignes = []
+                for o in orders[:8]:
+                    bloc = f"Décret n° {o['numero']} — {o['date']}\n{o['titre']}"
+                    if o["resume"]:
+                        bloc += f"\n{o['resume']}"
+                    if o["lien"]:
+                        bloc += f"\n{o['lien']}"
+                    lignes.append(bloc)
+                print(f"    ✓ {len(lignes)} décret(s) extraits via API interceptée.")
+                return (
+                    f"Décrets du Conseil ({year}-{month:02d}) — "
+                    f"{len(lignes)} décret(s) :\n\n"
+                    + "\n\n---\n\n".join(lignes)
+                )
 
-        if all_order_links:
-            break  # Found orders — no need to check previous month
+        # Tenter d'extraire depuis le HTML rendu par Playwright
+        if rendered_html:
+            soup = BeautifulSoup(rendered_html, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                tag.decompose()
 
-    # If date-filtered search found nothing, try without filters
-    if not all_order_links:
-        r = safe_get(search_url) or safe_get_js(search_url)
-        if r:
-            soup = BeautifulSoup(r.text, "html.parser")
+            order_links = []
             for a in soup.find_all("a", href=True):
                 href = a["href"]
                 texte = a.get_text(strip=True)
                 if (
                     "orders-in-council" in href
-                    and "/search/" not in href
+                    and "/search" not in href
                     and href.count("/") >= 3
                 ):
                     full = href if href.startswith("http") else base + href
-                    all_order_links.append((texte or href.rstrip("/").split("/")[-1], full))
+                    entry = (texte or href.rstrip("/").split("/")[-1], full)
+                    if entry not in order_links:
+                        order_links.append(entry)
 
-    if not all_order_links:
-        r = safe_get(search_url) or safe_get_js(search_url)
-        if r:
+            if order_links:
+                resultats = []
+                for titre, lien in order_links[:5]:
+                    time.sleep(1)
+                    r_order = safe_get(lien) or safe_get_js(lien)
+                    if not r_order:
+                        resultats.append(
+                            f"Décret : {titre}\nLien : {lien}\n(Contenu non accessible)"
+                        )
+                        continue
+                    texte = soup_text(r_order, max_chars=2000, main_only=True)
+                    if texte:
+                        resultats.append(f"Décret : {titre}\nLien : {lien}\n\n{texte}")
+                        print(f"    ✓ Contenu récupéré : {titre[:60]}")
+                    else:
+                        resultats.append(
+                            f"Décret : {titre}\nLien : {lien}\n(Contenu vide)"
+                        )
+                if resultats:
+                    return (
+                        f"Décrets du Conseil ({len(resultats)} décret(s)) :\n\n"
+                        + "\n\n---\n\n".join(resultats)
+                    )
+                break  # order_links trouvés mais pages vides — ne pas retenter le mois d'avant
+
+    # --- Étape 2 : fallback HTTP pur sans filtres de date ---
+    r = safe_get(search_url)
+    if r:
+        soup = BeautifulSoup(r.text, "html.parser")
+        order_links = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            texte = a.get_text(strip=True)
+            if (
+                "orders-in-council" in href
+                and "/search" not in href
+                and href.count("/") >= 3
+            ):
+                full = href if href.startswith("http") else base + href
+                order_links.append((texte or href.rstrip("/").split("/")[-1], full))
+
+        if order_links:
+            resultats = []
+            for titre, lien in order_links[:5]:
+                time.sleep(1)
+                r_order = safe_get(lien) or safe_get_js(lien)
+                if not r_order:
+                    resultats.append(f"Décret : {titre}\nLien : {lien}\n(Non accessible)")
+                    continue
+                texte = soup_text(r_order, max_chars=2000, main_only=True)
+                resultats.append(
+                    f"Décret : {titre}\nLien : {lien}\n\n{texte}"
+                    if texte
+                    else f"Décret : {titre}\nLien : {lien}\n(Contenu vide)"
+                )
             return (
-                "Décrets du Conseil (index seulement — "
-                "liens individuels non détectés):\n"
-                + soup_text(r, max_chars=3000)
-            )
-        return "Page des Décrets du Conseil non disponible."
-
-    # Fetch the content of each individual order (up to 5 most recent)
-    resultats = []
-    for titre, lien in all_order_links[:5]:
-        time.sleep(1)
-        r_order = safe_get(lien) or safe_get_js(lien)
-        if not r_order:
-            resultats.append(f"Décret : {titre}\nLien : {lien}\n(Contenu non accessible)")
-            continue
-        texte = soup_text(r_order, max_chars=2000, main_only=True)
-        if texte:
-            resultats.append(f"Décret : {titre}\nLien : {lien}\n\n{texte}")
-            print(f"    ✓ Contenu du décret récupéré : {titre[:60]}")
-        else:
-            resultats.append(
-                f"Décret : {titre}\nLien : {lien}\n(Contenu vide ou non lisible)"
+                f"Décrets du Conseil ({len(resultats)} décret(s)) :\n\n"
+                + "\n\n---\n\n".join(resultats)
             )
 
-    header = f"Décrets du Conseil ({len(resultats)} décret(s) récupéré(s)) :"
-    return header + "\n\n" + "\n\n---\n\n".join(resultats)
+        return "Décrets du Conseil — index accessible, aucun lien individuel détecté."
+
+    return "Page des Décrets du Conseil non disponible."
 
 
 # ---------------------------------------------------------------------------
