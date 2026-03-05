@@ -20,6 +20,7 @@ import feedparser
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from urllib.parse import urljoin
 from fetchers import safe_get_js
 
 HEADERS = {
@@ -52,6 +53,73 @@ def safe_get(url: str, timeout: int = 15) -> Optional[requests.Response]:
     except Exception as e:
         print(f"    ⚠ {url} : {e}")
         return None
+
+
+def fetch_gov_news(province: str, source_name: str, rss_urls: list, html_urls: list = None) -> list:
+    """
+    Cherche des mentions de l'Ontario dans les communiqués gouvernementaux d'une province.
+    Essaie les flux RSS en priorité, puis les pages HTML en fallback.
+    Retourne une liste de résultats formatés.
+    """
+    resultats = []
+
+    # --- RSS ---
+    for url in rss_urls:
+        try:
+            feed = feedparser.parse(url)
+            if not feed.entries:
+                continue
+            print(f"    ✓ RSS communiqués {province} : {url} ({len(feed.entries)} entrées)")
+            for entry in feed.entries[:20]:
+                texte_brut = (
+                    entry.get("title", "") + " " +
+                    entry.get("summary", "") + " " +
+                    entry.get("content", [{}])[0].get("value", "") if entry.get("content") else
+                    entry.get("title", "") + " " + entry.get("summary", "")
+                )
+                ext = texte_pertinent(texte_brut)
+                if ext:
+                    lien = entry.get("link", url)
+                    try:
+                        pub = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+                        date_str = pub.strftime("%Y-%m-%d")
+                    except Exception:
+                        date_str = "date inconnue"
+                    resultats.append(formater_resultat(
+                        province, f"{source_name} — Communiqués ({date_str})", lien, ext
+                    ))
+            if resultats:
+                return resultats  # RSS a fonctionné, inutile de scraper le HTML
+        except Exception as e:
+            print(f"    ⚠ RSS communiqués {province} {url} : {e}")
+
+    # --- HTML fallback ---
+    for url in (html_urls or []):
+        r = safe_get(url)
+        if not r:
+            continue
+        soup = BeautifulSoup(r.text, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer"]):
+            tag.decompose()
+        # Parcourir les titres/liens de communiqués
+        for a in soup.find_all("a", href=True):
+            titre = a.get_text(strip=True)
+            if len(titre) < 15:
+                continue
+            if PATTERN_ONTARIO.search(titre):
+                href = a["href"]
+                if not href.startswith("http"):
+                    href = urljoin(url, href)
+                resultats.append(formater_resultat(
+                    province, source_name, href, titre
+                ))
+        # Si aucun lien ne contient "Ontario", chercher dans le texte de la page
+        if not resultats:
+            ext = texte_pertinent(r.text)
+            if ext:
+                resultats.append(formater_resultat(province, source_name, url, ext))
+
+    return resultats
 
 
 def texte_pertinent(html_ou_texte: str, max_chars: int = 800) -> str:
@@ -92,6 +160,17 @@ def formater_resultat(province: str, source: str, url: str, extrait: str) -> str
 def fetch_quebec():
     resultats = []
 
+    # Communiqués du gouvernement du Québec
+    resultats.extend(fetch_gov_news(
+        "Québec", "Gouvernement du Québec — Communiqués",
+        rss_urls=[
+            "https://www.quebec.ca/en/rss/news",
+            "https://www.quebec.ca/gouvernement/nouvelles/rss",
+            "https://nouvelles.gouv.qc.ca/rss.php",
+        ],
+        html_urls=["https://www.quebec.ca/nouvelles"]
+    ))
+
     # Gazette officielle du Québec — Index des publications récentes
     r = safe_get("https://www.publicationsduquebec.gouv.qc.ca/home.php")
     if r:
@@ -126,6 +205,16 @@ def fetch_quebec():
 # ---------------------------------------------------------------------------
 def fetch_bc():
     resultats = []
+
+    # Communiqués du gouvernement de la C.-B.
+    resultats.extend(fetch_gov_news(
+        "Colombie-Britannique", "Gouvernement de la C.-B. — Communiqués",
+        rss_urls=[
+            "https://news.gov.bc.ca/rss/news",
+            "https://news.gov.bc.ca/feed",
+        ],
+        html_urls=["https://news.gov.bc.ca/releases"]
+    ))
 
     # BC Gazette
     r = safe_get("https://www.bclaws.gov.bc.ca/civix/document/id/bcgaz1/bcgaz1/")
@@ -180,6 +269,16 @@ def fetch_bc():
 def fetch_alberta():
     resultats = []
 
+    # Communiqués du gouvernement de l'Alberta
+    resultats.extend(fetch_gov_news(
+        "Alberta", "Gouvernement de l'Alberta — Communiqués",
+        rss_urls=[
+            "https://www.alberta.ca/rss/news.rss",
+            "https://www.alberta.ca/release.cfm?xID=rss",
+        ],
+        html_urls=["https://www.alberta.ca/news"]
+    ))
+
     # Alberta Gazette
     r = safe_get("https://open.alberta.ca/publications?subject=alberta-gazette")
     if r:
@@ -221,6 +320,16 @@ def fetch_alberta():
 def fetch_manitoba():
     resultats = []
 
+    # Communiqués du gouvernement du Manitoba
+    resultats.extend(fetch_gov_news(
+        "Manitoba", "Gouvernement du Manitoba — Communiqués",
+        rss_urls=[
+            "https://news.gov.mb.ca/news/rss.html",
+            "https://news.gov.mb.ca/rss/news.rss",
+        ],
+        html_urls=["https://news.gov.mb.ca/news/"]
+    ))
+
     # Manitoba Gazette
     r = safe_get("https://web2.gov.mb.ca/laws/gazette/index_gazette.php")
     if r:
@@ -257,6 +366,15 @@ def fetch_manitoba():
 def fetch_saskatchewan():
     resultats = []
 
+    # Communiqués du gouvernement de la Saskatchewan
+    resultats.extend(fetch_gov_news(
+        "Saskatchewan", "Gouvernement de la Saskatchewan — Communiqués",
+        rss_urls=[
+            "https://www.saskatchewan.ca/government/news-and-media/rss",
+        ],
+        html_urls=["https://www.saskatchewan.ca/government/news-and-media"]
+    ))
+
     # Saskatchewan Gazette — SPA avec routage côté client, nécessite JavaScript
     r = safe_get_js("https://publications.saskatchewan.ca/#/products?pageSize=20&keyword=gazette")
     if r:
@@ -282,13 +400,42 @@ def fetch_saskatchewan():
 def fetch_nova_scotia():
     resultats = []
 
-    # NS Legislature — Hansard
+    # Communiqués du gouvernement de la Nouvelle-Écosse (source primaire pour les ententes)
+    resultats.extend(fetch_gov_news(
+        "Nouvelle-Écosse", "Gouvernement de la Nouvelle-Écosse — Communiqués",
+        rss_urls=[
+            "https://novascotia.ca/news/rss/",
+            "https://novascotia.ca/rss/news.rss",
+            "https://www.novascotia.ca/news/rss/",
+        ],
+        html_urls=["https://novascotia.ca/news/"]
+    ))
+
+    # NS Legislature — Hansard (récupérer les débats récents, pas seulement l'index)
     r = safe_get("https://nslegislature.ca/legislative-business/hansard")
     if r:
-        ext = texte_pertinent(r.text)
-        if ext:
-            resultats.append(formater_resultat("Nouvelle-Écosse",
-                "Hansard de la Nouvelle-Écosse", "https://nslegislature.ca", ext))
+        soup = BeautifulSoup(r.text, "html.parser")
+        # Suivre le lien vers le Hansard le plus récent
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            texte_lien = a.get_text(strip=True)
+            if "hansard" in href.lower() and len(texte_lien) > 5:
+                if not href.startswith("http"):
+                    href = "https://nslegislature.ca" + href
+                time.sleep(1)
+                r2 = safe_get(href)
+                if r2:
+                    ext = texte_pertinent(r2.text)
+                    if ext:
+                        resultats.append(formater_resultat("Nouvelle-Écosse",
+                            f"Hansard N.-É. — {texte_lien}", href, ext))
+                break
+        # Fallback : texte de la page d'index si aucun Hansard récent n'a été suivi
+        else:
+            ext = texte_pertinent(r.text)
+            if ext:
+                resultats.append(formater_resultat("Nouvelle-Écosse",
+                    "Hansard de la Nouvelle-Écosse", "https://nslegislature.ca", ext))
 
     # NS Utility and Review Board
     r = safe_get("https://nsuarb.novascotia.ca/hearings")
@@ -306,6 +453,16 @@ def fetch_nova_scotia():
 # ---------------------------------------------------------------------------
 def fetch_new_brunswick():
     resultats = []
+
+    # Communiqués du gouvernement du Nouveau-Brunswick
+    resultats.extend(fetch_gov_news(
+        "Nouveau-Brunswick", "Gouvernement du N.-B. — Communiqués",
+        rss_urls=[
+            "https://www2.gnb.ca/content/gnb/en/news.rss.html",
+            "https://www2.gnb.ca/content/gnb/fr/nouvelles.rss.html",
+        ],
+        html_urls=["https://www2.gnb.ca/content/gnb/en/news.html"]
+    ))
 
     # NB Legislature — Hansard
     r = safe_get("https://www.gnb.ca/legis/hansard/index-f.asp")
@@ -332,6 +489,15 @@ def fetch_new_brunswick():
 def fetch_pei():
     resultats = []
 
+    # Communiqués du gouvernement de l'ÎPÉ
+    resultats.extend(fetch_gov_news(
+        "Île-du-Prince-Édouard", "Gouvernement de l'ÎPÉ — Communiqués",
+        rss_urls=[
+            "https://www.princeedwardisland.ca/en/rss/news",
+        ],
+        html_urls=["https://www.princeedwardisland.ca/en/news"]
+    ))
+
     r = safe_get("https://www.assembly.pe.ca/hansard")
     if r:
         ext = texte_pertinent(r.text)
@@ -346,6 +512,16 @@ def fetch_pei():
 # ---------------------------------------------------------------------------
 def fetch_newfoundland():
     resultats = []
+
+    # Communiqués du gouvernement de T.-N.-L.
+    resultats.extend(fetch_gov_news(
+        "Terre-Neuve-et-Labrador", "Gouvernement de T.-N.-L. — Communiqués",
+        rss_urls=[
+            "https://www.gov.nl.ca/releases/rss/",
+            "https://www.gov.nl.ca/rss/news.rss",
+        ],
+        html_urls=["https://www.gov.nl.ca/releases/"]
+    ))
 
     r = safe_get("https://www.assembly.nl.ca/HouseBusiness/Hansard")
     if r:
