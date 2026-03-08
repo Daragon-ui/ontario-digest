@@ -10,14 +10,24 @@ SYSTEM_PROMPT = """Tu es un analyste politique senior spécialisé dans la polit
 Tu travailles pour un service de veille destiné à des journalistes, des décideurs et des citoyens engagés.
 Ton style est précis, factuel, en français québécois/canadien. Tu cites des noms, des ministères,
 des numéros de projets de loi quand c'est disponible. Tu ne spécules jamais — tu te bases
-strictement sur les faits présents dans les sources fournies."""
+strictement sur les faits présents dans les sources fournies.
+
+PÉRIMÈTRE GÉOGRAPHIQUE STRICT : Les sections 1 à 5 du digest couvrent exclusivement la politique
+ontarienne. N'y mentionne jamais d'événements survenus dans d'autres provinces ou territoires
+canadiens, sauf s'ils affectent directement l'Ontario ou font l'objet d'une action du gouvernement
+ontarien. La section 6 (Ontario ailleurs au Canada) est la seule destinée au contenu interprovincial."""
 
 
 def generate_digest(sources: dict) -> str:
-    client = anthropic.Anthropic()
+    """
+    Prend un dictionnaire {nom_source: contenu} et retourne
+    le digest quotidien en 5 sections, en français.
+    """
+    client = anthropic.Anthropic()  # Lit ANTHROPIC_API_KEY automatiquement
 
     today = datetime.now().strftime("%A %d %B %Y")
 
+    # Assembler le contenu de toutes les sources
     bloc_sources = ""
     for nom, contenu in sources.items():
         separateur = "=" * 60
@@ -35,7 +45,11 @@ Génère le digest quotidien structuré en EXACTEMENT 6 sections avec ce format 
 [Débats parlementaires, déclarations d'élus, prises de position. Cite des noms et des partis.]
 
 ## ✅ Ce qui s'est passé
-[Faits accomplis : décrets adoptés, lois promulguées, annonces officielles, nominations gouvernementales.]
+[Faits accomplis : décrets adoptés, lois promulguées, annonces officielles, nominations gouvernementales.
+Pour chaque décret du Conseil contenant une ligne « PERSONNES/ENTITÉS EN GRAS DANS LE DÉCRET »,
+nomme explicitement la personne ou l'entité concernée. Évalue ensuite le potentiel journalistique
+de cette nomination : qui est cette personne (si identifiable), quel organisme, quel ministère,
+et pourquoi cela pourrait intéresser un journaliste. Ne passe sous silence aucun nom fourni.]
 
 ## 🔍 Ce qui se trame
 [Inscriptions au registre des lobbyistes, consultations réglementaires ouvertes, projets en préparation.]
@@ -47,12 +61,19 @@ Génère le digest quotidien structuré en EXACTEMENT 6 sections avec ce format 
 [Consultations à venir, échéances, projets annoncés pour les prochains jours ou semaines.]
 
 ## 🍁 Ontario ailleurs au Canada
-Pour chaque référence à l'Ontario trouvée dans les sources officielles des autres provinces
-et territoires, présente un paragraphe structuré ainsi :
+N'inclus ici QUE les références où l'Ontario (ou un de ses acteurs) est nommé ou directement
+concerné dans une source officielle d'une autre province ou d'un territoire. Ignore tout contenu
+qui ne mentionne pas explicitement l'Ontario ou qui concerne exclusivement une autre province.
 
-**[Province]** — [Source exacte] : [Résumé de 2-3 phrases.] **Potentiel journalistique : [faible / moyen / élevé]** — [Justification en une phrase.]
+Pour chaque référence retenue, présente un paragraphe structuré ainsi :
 
-Si aucune référence n'a été détectée, indique-le brièvement.
+**[Province]** — [Source exacte] : [Résumé de 2-3 phrases expliquant le contexte et ce qui
+est dit sur l'Ontario.] **Potentiel journalistique : [faible / moyen / élevé]** — [Justification
+en une phrase : pourquoi ce passage pourrait intéresser un journaliste ou signaler un enjeu
+interprovincial, un conflit latent, un accord en négociation, ou une décision qui touche
+l'Ontario à l'insu du public ontarien.]
+
+Si aucune référence pertinente n'a été détectée, indique-le en une seule phrase.
 
 ---
 
@@ -60,6 +81,13 @@ RÈGLES STRICTES :
 - Chaque section doit avoir au moins 2-3 phrases substantielles.
 - Si une section manque de matière, explique pourquoi (ex : « L'Assemblée ne siégeait pas »).
 - Sois factuel. Ne fabrique aucune information absente des sources.
+- Dans la section « Ontario ailleurs au Canada », n'invente rien : utilise uniquement les
+  extraits fournis. Si un extrait est ambigu, dis-le explicitement.
+- Sections 1 à 5 : contenu ontarien uniquement. Tout événement survenu dans une autre province
+  sans lien direct avec l'Ontario doit être ignoré ou réservé à la section 6.
+- Pour les Décrets du Conseil : si la source indique « PERSONNES/ENTITÉS EN GRAS DANS LE DÉCRET »,
+  nomme chaque personne dans le digest. Pour les communiqués d'Ontario Newsroom, résume chaque
+  communiqué pertinent en 2 phrases maximum.
 - Utilise le français canadien (ex : « courriel », « gouvernement », « première ministre »).
 - Termine le digest par : *Digest généré automatiquement le {today} à partir de sources officielles.*"""
 
@@ -74,6 +102,7 @@ RÈGLES STRICTES :
     ) as stream:
         final = stream.get_final_message()
 
+    # Extraire uniquement le texte (ignorer les blocs de réflexion)
     texte = ""
     for bloc in final.content:
         if bloc.type == "text":
