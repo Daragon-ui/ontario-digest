@@ -126,40 +126,73 @@ def try_rss(urls, cutoff_hours=36, max_items=8):
 def fetch_news_ontario():
     print("  → news.ontario.ca...")
 
+    # Essayer plusieurs variantes RSS (le chemin exact varie selon la version du CMS)
     rss = try_rss([
         "https://news.ontario.ca/en/rss",
         "https://news.ontario.ca/en/rss/all",
+        "https://news.ontario.ca/en/feed",
+        "https://news.ontario.ca/feed/",
         "https://news.ontario.ca/en/releases.rss",
+        "https://news.ontario.ca/rss",
     ])
     if rss:
         return rss
 
-    # HTML fallback: scrape the releases page (essaie d'abord sans JS, puis avec)
+    # Scraping HTML — Playwright en priorité (site JS-lourd), HTTP en fallback
     for url in ["https://news.ontario.ca/en/releases", "https://news.ontario.ca/en"]:
-        r = safe_get(url) or safe_get_js(url)
+        # Tenter HTTP d'abord ; si la page semble vide/partielle, forcer Playwright
+        r = safe_get(url)
+        if not r or len(r.text) < 3000:
+            r = safe_get_js(url) or r
         if not r:
             continue
+
         soup = BeautifulSoup(r.text, "html.parser")
         for tag in soup(["script", "style", "nav", "footer"]):
             tag.decompose()
+
         items = []
         seen = set()
+
+        # Chercher d'abord les liens vers des communiqués individuels
         for a in soup.find_all("a", href=True):
             href = a["href"]
             titre = a.get_text(strip=True)
             if len(titre) < 20 or titre in seen:
                 continue
-            if "/release/" in href or "/releases/" in href:
+            if re.search(r"/release[s]?/", href):
                 if not href.startswith("http"):
                     href = "https://news.ontario.ca" + href
                 seen.add(titre)
                 items.append(f"{titre}\n{href}")
                 if len(items) >= 8:
                     break
+
+        # Chercher aussi dans les balises <article> ou <h2>/<h3> si aucun lien trouvé
+        if not items:
+            for container in soup.find_all(["article", "li"], class_=re.compile(r"release|news|story|item", re.I)):
+                titre_tag = container.find(["h2", "h3", "h4", "a"])
+                lien_tag = container.find("a", href=True)
+                if not titre_tag or not lien_tag:
+                    continue
+                titre = titre_tag.get_text(strip=True)
+                href = lien_tag["href"]
+                if len(titre) < 20 or titre in seen:
+                    continue
+                if not href.startswith("http"):
+                    href = "https://news.ontario.ca" + href
+                seen.add(titre)
+                items.append(f"{titre}\n{href}")
+                if len(items) >= 8:
+                    break
+
         if items:
-            return "Communiqués récents (news.ontario.ca):\n\n" + "\n\n".join(items)
-        # last resort: raw text
-        return soup_text(r, max_chars=3000)
+            return "Communiqués récents (news.ontario.ca) :\n\n" + "\n\n".join(items)
+
+        # Dernier recours : texte brut de la page si suffisamment substantiel
+        text = soup_text(r, max_chars=3000)
+        if len(text) > 300:
+            return "Ontario Newsroom — contenu brut :\n\n" + text
 
     return "Communiqués du gouvernement non disponibles."
 
@@ -415,6 +448,62 @@ def _oic_json_to_links(captured_json: list, base: str = "https://www.ontario.ca"
     return links
 
 
+def _oic_extract_bold_names(html: str) -> list:
+    """
+    Extrait les noms écrits en gras (<strong> ou <b>) dans un document de décret.
+    Les décrets ontariens indiquent toujours le nom de la personne nommée en gras.
+    Retourne une liste dédupliquée de chaînes (noms ou courtes expressions en gras).
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    names = []
+    seen = set()
+    for tag in soup.find_all(["strong", "b"]):
+        name = tag.get_text(strip=True)
+        # Garder seulement des textes ressemblant à un nom propre (1-6 mots, pas trop long)
+        if not name or name in seen or len(name) > 100:
+            continue
+        words = name.split()
+        if len(words) < 1 or len(words) > 6:
+            continue
+        # Ignorer les chaînes entièrement en majuscules (titres de section) ou trop courtes
+        if name.isupper() or len(name) < 3:
+            continue
+        seen.add(name)
+        names.append(name)
+    return names
+
+
+def _oic_soup_text_with_names(r, max_chars=2000) -> str:
+    """
+    Variante de soup_text pour les décrets : extrait le texte ET préfixe
+    la liste des noms en gras trouvés dans le document.
+    """
+    soup = BeautifulSoup(r.text, "html.parser")
+
+    bold_names = _oic_extract_bold_names(r.text)
+
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+        tag.decompose()
+    main = (
+        soup.find("main")
+        or soup.find(id="content")
+        or soup.find(class_="content")
+        or soup.find(attrs={"role": "main"})
+        or soup
+    )
+    lines = [
+        l.strip()
+        for l in main.get_text(separator="\n").splitlines()
+        if len(l.strip()) > 10
+    ]
+    texte = "\n".join(lines[:200])[:max_chars]
+
+    if bold_names:
+        prefix = "PERSONNES/ENTITÉS EN GRAS DANS LE DÉCRET : " + " | ".join(bold_names) + "\n\n"
+        return prefix + texte
+    return texte
+
+
 def _oic_fetch_content_playwright(lien: str) -> str:
     """Récupère le contenu d'un décret via Playwright (fallback JS)."""
     try:
@@ -524,9 +613,26 @@ def fetch_orders_in_council():
         contenu = ""
         r_order = safe_get(lien)
         if r_order:
-            contenu = soup_text(r_order, max_chars=2000, main_only=True)
+            # Utiliser la version enrichie qui extrait les noms en gras
+            contenu = _oic_soup_text_with_names(r_order, max_chars=2000)
         if not contenu:
-            contenu = _oic_fetch_content_playwright(lien)
+            # Fallback Playwright : extraire aussi les noms en gras du HTML rendu
+            try:
+                from playwright.sync_api import sync_playwright
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    page = browser.new_page()
+                    page.goto(lien, wait_until="networkidle", timeout=30_000)
+                    html = page.content()
+                    browser.close()
+
+                class _FakeR:
+                    text = html
+
+                contenu = _oic_soup_text_with_names(_FakeR(), max_chars=2000)
+            except Exception as e:
+                print(f"    ⚠ Playwright fallback décret : {e}")
+                contenu = _oic_fetch_content_playwright(lien)
         if contenu:
             resultats.append(f"Décret : {titre}\nLien : {lien}\n\n{contenu}")
             print(f"    ✓ Décret récupéré : {titre[:60]}")
