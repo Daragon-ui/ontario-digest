@@ -73,7 +73,7 @@ en une phrase : pourquoi ce passage pourrait intéresser un journaliste ou signa
 interprovincial, un conflit latent, un accord en négociation, ou une décision qui touche
 l'Ontario à l'insu du public ontarien.]
 
-Si aucune référence pertinente n'a été détectée, indique-le en une seule phrase.
+Si aucune référence pertinente n'a été détectée, écris uniquement : « Aucune référence à l'Ontario n'a été détectée dans les sources interprovinciales aujourd'hui. » Ne mentionne pas les provinces consultées ni les sujets qui en ont été exclus.
 
 ---
 
