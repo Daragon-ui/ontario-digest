@@ -22,6 +22,7 @@ from fetchers import fetch_all
 from interprovincial import fetch_interprovincial
 from digest import generate_digest
 from mailer import send_email
+from history import get_recent_items, record_items, extract_tracked_items
 
 
 def verifier_variables():
@@ -57,17 +58,28 @@ def main():
     sources_interprov = fetch_interprovincial()
     sources["Ontario ailleurs au Canada (sources interprovinciales)"] = sources_interprov
 
-    # 4. Générer le digest avec Claude
-    digest = generate_digest(sources)
+    # 4. Charger l'historique des éléments déjà couverts
+    seen_items = get_recent_items()
+    if seen_items:
+        print(f"📋 {len(seen_items)} élément(s) déjà couverts dans les 14 derniers jours — seront exclus du digest.")
 
-    # 5. Afficher le résultat dans la console
+    # 5. Générer le digest avec Claude
+    digest = generate_digest(sources, seen_items=seen_items)
+
+    # 5b. Sauvegarder les éléments couverts aujourd'hui dans l'historique
+    nouveaux_items = extract_tracked_items(sources)
+    record_items(nouveaux_items)
+    if nouveaux_items:
+        print(f"💾 {len(nouveaux_items)} élément(s) enregistrés dans l'historique.")
+
+    # 6. Afficher le résultat dans la console
     print(f"\n{'='*60}")
     print("DIGEST GÉNÉRÉ :")
     print(f"{'='*60}")
     print(digest)
     print(f"{'='*60}\n")
 
-    # 6. Envoyer par courriel (sauf en mode dry run)
+    # 7. Envoyer par courriel (sauf en mode dry run)
     if dry_run:
         print("🔧 DRY_RUN : courriel non envoyé. Le digest est affiché ci-dessus.")
     else:
