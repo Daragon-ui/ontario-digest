@@ -18,10 +18,13 @@ canadiens, sauf s'ils affectent directement l'Ontario ou font l'objet d'une acti
 ontarien. La section 6 (Ontario ailleurs au Canada) est la seule destinée au contenu interprovincial."""
 
 
-def generate_digest(sources: dict) -> str:
+def generate_digest(sources: dict, seen_items: list = None) -> str:
     """
     Prend un dictionnaire {nom_source: contenu} et retourne
     le digest quotidien en 5 sections, en français.
+
+    seen_items : liste d'éléments déjà couverts dans les digests précédents
+                 (décrets, communiqués) à ne pas répéter.
     """
     client = anthropic.Anthropic()  # Lit ANTHROPIC_API_KEY automatiquement
 
@@ -33,10 +36,26 @@ def generate_digest(sources: dict) -> str:
         separateur = "=" * 60
         bloc_sources += f"\n\n{separateur}\nSOURCE : {nom}\n{separateur}\n{contenu}"
 
+    # Bloc d'historique : éléments déjà couverts à ne pas répéter
+    bloc_historique = ""
+    if seen_items:
+        liste = "\n".join(f"- {item}" for item in seen_items)
+        bloc_historique = f"""
+---
+
+ÉLÉMENTS DÉJÀ COUVERTS DANS LES DIGESTS RÉCENTS (14 derniers jours) — À NE PAS RÉPÉTER :
+{liste}
+
+Pour chacun de ces éléments : ne l'inclus dans aucune section du digest d'aujourd'hui,
+SAUF s'il y a une avancée significative et nouvelle (ex : nomination confirmée par l'assemblée,
+décret amendé, annonce d'une enquête). Dans ce cas, signale explicitement que c'est un suivi.
+
+"""
+
     user_prompt = f"""Voici les contenus bruts récupérés ce matin ({today}) depuis les sources officielles
 de la politique provinciale ontarienne et des autres provinces canadiennes :
 {bloc_sources}
-
+{bloc_historique}
 ---
 
 Génère le digest quotidien structuré en EXACTEMENT 6 sections avec ce format :
