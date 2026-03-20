@@ -1,34 +1,47 @@
 # Ontario Parks Reservation Bot — Configuration
 # Remplissez vos informations ici avant de lancer le bot.
+# ⚠️  Ne partagez jamais ce fichier — il contient vos identifiants.
 
 account:
   email: "votre@courriel.com"       # Votre courriel Ontario Parks
-  password: "votre_mot_de_passe"    # Votre mot de passe (ne partagez jamais ce fichier)
+  password: "votre_mot_de_passe"    # Votre mot de passe
 
 reservation:
-  park_name: "Balsam Lake"          # Nom du parc tel qu'affiché sur le site
-  campground: "Balsam Lake"         # Nom du terrain de camping (souvent même nom)
-  site_number: "153"                # Numéro de site préféré (laisser vide "" pour prendre le premier disponible)
-  arrival_date: "2026-08-20"        # Date d'arrivée (format YYYY-MM-DD)
-  num_nights: 3                     # Nombre de nuits
-  party_size: 3                     # Nombre de personnes
-  equipment_type: "tent"            # "tent" | "trailer" | "rv" | "any"
+  type: "backcountry"               # "backcountry" (arrière-pays) | "frontcountry" (camping régulier)
+  park_name: "Killarney"            # Nom du parc tel qu'affiché sur le site Ontario Parks
+  access_point: "Bell Lake"         # Point d'accès (Bell Lake ou George Lake pour Killarney)
+  entry_date: "2026-08-20"          # Date d'entrée (format YYYY-MM-DD)
+  num_nights: 3                     # Nombre de nuits total
+  party_size: 3                     # Nombre de personnes (ajustez au besoin)
+  num_canoes: 2                     # Nombre d'embarcations
 
-# Sites alternatifs si le site principal est pris (optionnel)
-fallback_sites:
-  - ""                              # Laisser vide = premier site disponible
+  # Itinéraire nuit par nuit
+  # Laissez site_number vide ("") pour prendre le premier disponible sur ce lac.
+  itinerary:
+    - night: 1
+      lake: "Balsam Lake"
+      site_number: "153"
+    - night: 2
+      lake: "Balsam Lake"
+      site_number: "151"
+    - night: 3
+      lake: "Bell Lake"
+      site_number: "134"
+
+  # Sites alternatifs pour la nuit 1 si le site 153 est pris
+  fallback_sites_night1:
+    - ""                            # laisser vide = premier disponible sur Balsam Lake
 
 scheduler:
-  # Heure à laquelle la fenêtre de réservation s'ouvre (heure de l'Est)
-  # Ontario Parks ouvre les réservations à 7h00 AM ET, 5 mois à l'avance
+  # Ontario Parks ouvre les réservations à 7h00 AM heure de l'Est, 5 mois à l'avance.
+  # Pour une entrée le 20 août 2026 → fenêtre ouvre le 20 mars 2026 à 7h00 AM.
   open_time: "07:00"                # Format HH:MM (heure de l'Est)
-  # Le bot se met en attente et frappe pile à cette heure
-  # Lancer le script la veille au soir ou quelques minutes avant
+  # Lancez le script la veille au soir avec --wait pour qu'il se déclenche automatiquement.
 
 bot:
   # Mode de fonctionnement :
-  #   explore   → navigue sans se connecter, affiche les disponibilités (test sécuritaire)
-  #   dry_run   → se connecte, remplit le formulaire, S'ARRÊTE avant de payer (test complet)
+  #   explore   → navigue sans se connecter, affiche les disponibilités (test 100% sécuritaire)
+  #   dry_run   → se connecte, remplit le formulaire, S'ARRÊTE avant de payer
   #   live      → exécute la réservation réelle
   mode: "dry_run"
 
