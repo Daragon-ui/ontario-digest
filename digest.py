@@ -65,10 +65,12 @@ Génère le digest quotidien structuré en EXACTEMENT 6 sections avec ce format 
 
 ## ✅ Ce qui s'est passé
 [Faits accomplis : décrets adoptés, lois promulguées, annonces officielles, nominations gouvernementales.
-Pour chaque décret du Conseil contenant une ligne « PERSONNES/ENTITÉS EN GRAS DANS LE DÉCRET »,
-nomme explicitement la personne ou l'entité concernée. Évalue ensuite le potentiel journalistique
-de cette nomination : qui est cette personne (si identifiable), quel organisme, quel ministère,
-et pourquoi cela pourrait intéresser un journaliste. Ne passe sous silence aucun nom fourni.]
+Pour chaque décret du Conseil, mets en gras (`**...**`) son numéro et son titre/objet au début de la ligne
+(ex : **O.C. 123/2026 — Nomination de X à Y**). Si le décret contient une ligne
+« PERSONNES/ENTITÉS EN GRAS DANS LE DÉCRET », nomme explicitement la personne ou l'entité concernée.
+Évalue ensuite le potentiel journalistique de cette nomination : qui est cette personne (si identifiable),
+quel organisme, quel ministère, et pourquoi cela pourrait intéresser un journaliste. Ne passe sous silence
+aucun nom fourni.]
 
 ## 🔍 Ce qui se trame
 [Inscriptions au registre des lobbyistes, consultations réglementaires ouvertes, projets en préparation.]
@@ -84,15 +86,21 @@ N'inclus ici QUE les références où l'Ontario (ou un de ses acteurs) est nomm�
 concerné dans une source officielle d'une autre province ou d'un territoire. Ignore tout contenu
 qui ne mentionne pas explicitement l'Ontario ou qui concerne exclusivement une autre province.
 
-Pour chaque référence retenue, présente un paragraphe structuré ainsi :
+Évalue d'abord chaque référence. N'inclus que celles dont le potentiel journalistique est
+« moyen » ou « élevé » — omets complètement les entrées « faible ».
 
-**[Province]** — [Source exacte] : [Résumé de 2-3 phrases expliquant le contexte et ce qui
-est dit sur l'Ontario.] **Potentiel journalistique : [faible / moyen / élevé]** — [Justification
+Si plusieurs sources évoquent le **même sujet** impliquant l'Ontario, **regroupe-les en un seul
+paragraphe** (cite toutes les sources concernées). Un sujet = un paragraphe maximum.
+
+Pour chaque paragraphe retenu :
+
+**[Province(s)]** — [Source(s)] : [Résumé de 2-3 phrases expliquant le contexte et ce qui
+est dit sur l'Ontario.] **Potentiel journalistique : [moyen / élevé]** — [Justification
 en une phrase : pourquoi ce passage pourrait intéresser un journaliste ou signaler un enjeu
 interprovincial, un conflit latent, un accord en négociation, ou une décision qui touche
 l'Ontario à l'insu du public ontarien.]
 
-Si aucune référence pertinente n'a été détectée, écris uniquement : « Aucune référence à l'Ontario n'a été détectée dans les sources interprovinciales aujourd'hui. » Ne mentionne pas les provinces consultées ni les sujets qui en ont été exclus.
+Si aucune référence n'atteint le seuil moyen ou élevé, écris uniquement : « Aucune référence d'intérêt journalistique moyen ou élevé détectée ce jour. »
 
 ---
 
@@ -114,7 +122,7 @@ RÈGLES STRICTES :
 
     with client.messages.stream(
         model="claude-opus-4-6",
-        max_tokens=4000,
+        max_tokens=8192,
         thinking={"type": "adaptive"},
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
